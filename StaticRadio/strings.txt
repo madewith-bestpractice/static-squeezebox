@@ -1,0 +1,11 @@
+PLUGIN_STATICRADIO
+	EN	Static Radio
+
+PLUGIN_STATICRADIO_DESC
+	EN	A radio made of independent podcasts. Every station plays one shared live timeline, so everyone tuned in hears the same moment. Each episode streams straight from the show's own host.
+
+PLUGIN_STATICRADIO_LOADING
+	EN	Fetching today's schedule…
+
+PLUGIN_STATICRADIO_NO_SCHEDULE
+	EN	Couldn't fetch today's schedule. Please try again in a minute.

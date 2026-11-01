@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<extension>
+	<id>staticradio</id>
+	<name>PLUGIN_STATICRADIO</name>
+	<module>Plugins::StaticRadio::Plugin</module>
+	<version>0.1.0</version>
+	<description>PLUGIN_STATICRADIO_DESC</description>
+	<creator>Best Practice</creator>
+	<homepageURL>https://staticradio.app</homepageURL>
+	<icon>plugins/StaticRadio/html/images/icon.png</icon>
+	<category>radio</category>
+	<defaultState>enabled</defaultState>
+	<type>2</type>
+	<targetApplication>
+		<id>Lyrion Music Server</id>
+		<minVersion>8.0</minVersion>
+		<maxVersion>*</maxVersion>
+	</targetApplication>
+</extension>
