@@ -16,6 +16,7 @@ use Slim::Utils::Scanner::Remote;
 
 use Plugins::StaticRadio::Schedule;
 use Plugins::StaticRadio::Presence;
+use Plugins::StaticRadio::MP3Seek;
 
 my $log = logger('plugin.staticradio');
 
@@ -65,9 +66,14 @@ sub getNextTrack {
 		my $ep  = $live->{ep};
 		my $key = "$ep->{audioUrl}|$live->{slot_start}";
 		my $was = $now{ $client->id } || {};
-		# called again because the last episode ended (not a fresh tune)?
-		my $cur = $song->_currentTrack;
-		my $repeat = $cur && $cur->url ne $song->track->url;
+		# Called again for the next stretch of the stream (not a fresh tune)? Lyrion
+		# clones the playing song when it wants more, and the clone keeps the old
+		# episode's stream URL; a fresh tune starts with the station URL. (The
+		# clone's _currentTrack is reset to the station, so it can't tell us.)
+		# A short file such as a bulletin is fully fetched long before its end, so
+		# without this it would start over.
+		my $repeat = ($song->streamUrl || '') ne $song->track->url;
+		main::DEBUGLOG && $log->is_debug && $log->debug("$id: next track asked; repeat=$repeat was=" . ($was->{key} || '-') . " now=$key");
 
 		# In the gap after an episode (or past a bulletin's 30 s), or this episode
 		# already played to its end: wait quietly for the next one, as the phone does.
@@ -81,6 +87,11 @@ sub getNextTrack {
 		}
 
 		main::INFOLOG && $log->info(sprintf("%s: %s / %s at %.1f s", $id, $ep->{feedTitle}, $ep->{title}, $live->{offset_ms} / 1000));
+
+		# Make the scan finish reading the file's header (bitrate) before it calls
+		# back: for plain http:// files it otherwise answers at once, so it can
+		# start playing from the top, and we couldn't seek to the live moment.
+		$song->seekdata({ startTime => $live->{offset_ms} / 1000 });
 
 		Slim::Utils::Scanner::Remote->scanURL($ep->{audioUrl}, {
 			client => $client,
@@ -98,41 +109,76 @@ sub getNextTrack {
 				$song->streamUrl($track->url);
 				$track->title($ep->{title});
 
-				# land on the true live position: recompute now that the scan is done
-				my $off = Plugins::StaticRadio::Schedule->live($st, Plugins::StaticRadio::Schedule::now_ms() + LEAD_MS);
-				my $start_s = ($off && $off->{slot_start} == $live->{slot_start}) ? $off->{offset_ms} / 1000 : $live->{offset_ms} / 1000;
-				if ($start_s > 1) {
-					if (my $seek = $song->getSeekData($start_s)) {
+				my $go = sub {
+					my $mp3 = shift;
+					# land on the true live position: recompute now that the scan is done
+					my $off = Plugins::StaticRadio::Schedule->live($st, Plugins::StaticRadio::Schedule::now_ms() + LEAD_MS);
+					my $start_s = ($off && $off->{slot_start} == $live->{slot_start}) ? $off->{offset_ms} / 1000 : $live->{offset_ms} / 1000;
+					$song->seekdata(undef);
+					return if $start_s <= 1;
+					my $seek;
+					if ($mp3) {
+						$seek = { sourceStreamOffset => Plugins::StaticRadio::MP3Seek->byte_for($mp3, $start_s, $ep->{durationInSeconds}), timeOffset => $start_s };
+						main::DEBUGLOG && $log->is_debug && $log->debug(sprintf("%s: seek %.1f s -> byte %d (%s)", $id, $start_s,
+							$seek->{sourceStreamOffset}, $mp3->{toc} ? 'Xing table' : $mp3->{frames} ? 'Xing average' : $mp3->{vbr} ? 'VBR average' : $mp3->{byte_rate} ? sprintf('%.0f B/s measured', $mp3->{byte_rate}) : "$mp3->{kbps} kbps"));
+					}
+					$seek ||= $song->getSeekData($start_s) || _seek_by_size($track, $ep, $start_s);
+					if ($seek) {
 						$song->seekdata($seek);
 					} else {
 						$log->warn("$id: can't seek in this file (no bitrate); starting from the top");
 					}
-				}
-
-				$now{ $client->id } = {
-					station  => $id,
-					tag      => $st->{tag},
-					key      => $key,
-					show     => $ep->{feedTitle},
-					title    => $ep->{title},
-					image    => $ep->{imageUrl},
-					link     => $ep->{episodeUrl},
-					slot_end => $live->{slot_start} + $live->{slot_ms},
-					audio_end_wall => $live->{slot_start} + $live->{audio_end},
 				};
 
-				# leave the episode on time even if the file runs long (or a bulletin
-				# passes 30 s): the timeline moves on whether or not the file has
-				_schedule_end($client, $live->{slot_start} + $live->{audio_end});
+				my $finish = sub {
+					$go->(@_);
+					$now{ $client->id } = {
+						station  => $id,
+						tag      => $st->{tag},
+						key      => $key,
+						show     => $ep->{feedTitle},
+						title    => $ep->{title},
+						image    => $ep->{imageUrl},
+						link     => $ep->{episodeUrl},
+						slot_end => $live->{slot_start} + $live->{slot_ms},
+						audio_end_wall => $live->{slot_start} + $live->{audio_end},
+					};
 
-				# count this player on the station once it has played for a few seconds
-				Plugins::StaticRadio::Presence->tune($client, $id);
-				Plugins::StaticRadio::Presence->refresh_counts();
+					# leave the episode on time even if the file runs long (or a bulletin
+					# passes 30 s): the timeline moves on whether or not the file has
+					_schedule_end($client, $live->{slot_start} + $live->{audio_end});
 
-				$successCb->();
+					# count this player on the station once it has played for a few seconds
+					Plugins::StaticRadio::Presence->tune($client, $id);
+					Plugins::StaticRadio::Presence->refresh_counts();
+
+					$successCb->();
+				};
+
+				# MP3: read the file's own header to seek the way the phones do
+				if (($track->content_type || '') eq 'mp3') {
+					Plugins::StaticRadio::MP3Seek->probe($track->url, $finish);
+				} else {
+					$finish->();
+				}
 			},
 		});
 	});
+}
+
+# No bitrate from the scan: estimate it from the file's size and the episode's
+# published duration (fine for constant-bitrate files, close for the rest).
+sub _seek_by_size {
+	my ($track, $ep, $start_s) = @_;
+	my $size = $track->filesize or return;
+	my $dur  = $ep->{durationInSeconds} or return;
+	my $audio = $size - ($track->audio_offset || 0);
+	return if $audio <= 0;
+	main::INFOLOG && $log->info(sprintf("seeking by size: %.0f kbps estimated", $audio * 8 / $dur / 1000));
+	return {
+		sourceStreamOffset => ($track->audio_offset || 0) + int($audio / $dur * $start_s),
+		timeOffset         => $start_s,
+	};
 }
 
 sub _retry {
