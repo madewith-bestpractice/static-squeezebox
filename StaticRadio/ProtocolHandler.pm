@@ -8,6 +8,8 @@ package Plugins::StaticRadio::ProtocolHandler;
 # each episode from its publisher, so every listen counts as a normal download.
 
 use strict;
+
+use Scalar::Util;
 use base qw(Slim::Player::Protocols::HTTPS);
 
 use Slim::Utils::Log;
@@ -22,7 +24,11 @@ my $log = logger('plugin.staticradio');
 
 # Start this far ahead of the live moment: the scan, the request and the
 # player's buffer all take time before the first sample is heard.
-use constant LEAD_MS => 1500;
+use constant LEAD_MS => 1000;   # measured +0.7 s ahead with 1500 on squeezelite (8 stations); real hardware may start a little later
+
+# An episode that fails to open is retried this many times, this far apart.
+use constant MAX_RETRIES => 2;
+use constant RETRY_S     => 3;
 
 my %now;   # client id => what's on: { station, key, show, title, image, link, slot_end }
 
@@ -75,9 +81,31 @@ sub getNextTrack {
 		my $repeat = ($song->streamUrl || '') ne $song->track->url;
 		main::DEBUGLOG && $log->is_debug && $log->debug("$id: next track asked; repeat=$repeat was=" . ($was->{key} || '-') . " now=$key");
 
+		my $same = $repeat && $was->{key} && $was->{key} eq $key;
+
+		# The episode we handed over failed to open or stream (not a real repeat):
+		# try it again a couple of times, at the then-live offset, before giving up
+		# on it until the next episode.
+		if ($same && $was->{song} && $was->{song}->status == Slim::Player::Song::STATUS_FAILED()) {
+			if (($was->{fails} || 0) < MAX_RETRIES) {
+				$was->{fails}++;
+				$was->{retry} = 1;
+				$log->warn("$id: $ep->{audioUrl} failed; trying again ($was->{fails} of " . MAX_RETRIES . ")");
+				Slim::Utils::Timers::killTimers($client, \&_retry);
+				Slim::Utils::Timers::setTimer($client, Time::HiRes::time() + RETRY_S, \&_retry, $class, $song, $successCb, $errorCb);
+				return;
+			}
+			$log->warn("$id: giving up on $ep->{audioUrl} until the next episode");
+			Plugins::StaticRadio::Presence->tune($client, undef);   # silent: don't count this player
+			delete $was->{song};
+		}
+		elsif ($same && delete $was->{retry}) {
+			$same = 0;     # the retry above: open it afresh
+		}
+
 		# In the gap after an episode (or past a bulletin's 30 s), or this episode
 		# already played to its end: wait quietly for the next one, as the phone does.
-		if ($live->{offset_ms} >= $live->{audio_end} - 1000 || ($repeat && $was->{key} && $was->{key} eq $key)) {
+		if ($live->{offset_ms} >= $live->{audio_end} - 1000 || $same) {
 			my $wait_ms = $live->{slot_start} + $live->{slot_ms} - ($t + LEAD_MS) + 50;
 			$wait_ms = 250 if $wait_ms < 250;
 			main::INFOLOG && $log->info("$id: between episodes, next in ${wait_ms} ms");
@@ -142,7 +170,10 @@ sub getNextTrack {
 						link     => $ep->{episodeUrl},
 						slot_end => $live->{slot_start} + $live->{slot_ms},
 						audio_end_wall => $live->{slot_start} + $live->{audio_end},
+						song     => $song,
+						fails    => (($was->{key} || '') eq $key ? $was->{fails} : 0),
 					};
+					Scalar::Util::weaken($now{ $client->id }{song});
 
 					# leave the episode on time even if the file runs long (or a bulletin
 					# passes 30 s): the timeline moves on whether or not the file has
