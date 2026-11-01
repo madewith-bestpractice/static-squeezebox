@@ -12,6 +12,7 @@ use Slim::Utils::Strings qw(cstring);
 
 use Plugins::StaticRadio::Schedule;
 use Plugins::StaticRadio::ProtocolHandler;
+use Plugins::StaticRadio::Presence;
 
 my $log = Slim::Utils::Log->addLogCategory({
 	category     => 'plugin.staticradio',
@@ -35,6 +36,10 @@ sub initPlugin {
 	Plugins::StaticRadio::Schedule->get(sub {});   # warm the cache
 }
 
+sub shutdownPlugin {
+	Plugins::StaticRadio::Presence->leave_all();
+}
+
 sub getDisplayName { 'PLUGIN_STATICRADIO' }
 
 sub playerMenu { 'RADIO' }
@@ -45,6 +50,7 @@ sub icon { 'plugins/StaticRadio/html/images/icon.png' }
 sub stations {
 	my ($client, $cb, $args) = @_;
 
+	Plugins::StaticRadio::Presence->refresh_counts(sub {
 	Plugins::StaticRadio::Schedule->get(sub {
 		my $schedule = shift;
 		if (!$schedule) {
@@ -55,10 +61,12 @@ sub stations {
 		for my $st (@{ $schedule->{stations} }) {
 			my $live = Plugins::StaticRadio::Schedule->live($st);
 			my $ep = $live ? $live->{ep} : {};
+			my $c = Plugins::StaticRadio::Presence->count($st->{id});
+			my $on = join(': ', grep { $_ } $ep->{feedTitle}, $ep->{title});
 			push @items, {
-				name     => $st->{tag},
+				name     => $st->{tag} . ($c > 0 ? " \x{b7} $c listening" : ''),
 				line1    => $st->{tag},
-				line2    => join(': ', grep { $_ } $ep->{feedTitle}, $ep->{title}),
+				line2    => ($c > 0 ? "$c listening \x{b7} " : '') . $on,
 				type     => 'audio',
 				url      => "staticradio://station/$st->{id}",
 				image    => __PACKAGE__->icon,
@@ -66,6 +74,7 @@ sub stations {
 			};
 		}
 		$cb->({ items => \@items });
+	});
 	});
 }
 

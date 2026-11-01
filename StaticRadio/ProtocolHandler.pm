@@ -15,6 +15,7 @@ use Slim::Utils::Timers;
 use Slim::Utils::Scanner::Remote;
 
 use Plugins::StaticRadio::Schedule;
+use Plugins::StaticRadio::Presence;
 
 my $log = logger('plugin.staticradio');
 
@@ -31,6 +32,13 @@ sub isRemote { 1 }
 sub _station_id {
 	my $url = shift || '';
 	return $url =~ m{^staticradio://station/([\w-]+)} ? $1 : undef;
+}
+
+# The station URL itself isn't fetchable: hand the track straight back, and
+# let getNextTrack() scan the live episode instead.
+sub scanUrl {
+	my ($class, $url, $args) = @_;
+	$args->{cb}->($args->{song}->currentTrack());
 }
 
 sub new {
@@ -117,6 +125,10 @@ sub getNextTrack {
 				# passes 30 s): the timeline moves on whether or not the file has
 				_schedule_end($client, $live->{slot_start} + $live->{audio_end});
 
+				# count this player on the station once it has played for a few seconds
+				Plugins::StaticRadio::Presence->tune($client, $id);
+				Plugins::StaticRadio::Presence->refresh_counts();
+
 				$successCb->();
 			},
 		});
@@ -152,10 +164,13 @@ sub getMetadataFor {
 	my $id = _station_id($url);
 	my $n = $client && $now{ $client->id };
 	if ($n && $id && $n->{station} eq $id) {
+		my $c = Plugins::StaticRadio::Presence->count($id);
+		$c = 1 if $c < 1 && $client->isPlaying;          # you're listening
+		my $album = "Static Radio \x{b7} $n->{tag}" . ($c > 0 ? " \x{b7} $c listening" : '');
 		return {
 			title  => $n->{title},
 			artist => $n->{show},
-			album  => "Static Radio \x{b7} $n->{tag}",
+			album  => $album,
 			cover  => $n->{image} || 'plugins/StaticRadio/html/images/icon.png',
 			icon   => 'plugins/StaticRadio/html/images/icon.png',
 			type   => 'Static Radio',
@@ -178,6 +193,7 @@ sub onStop {
 	my $client = $song->master or return;
 	Slim::Utils::Timers::killTimers($client, \&_episode_end);
 	Slim::Utils::Timers::killTimers($client, \&_retry);
+	Plugins::StaticRadio::Presence->tune($client, undef);
 }
 
 1;
