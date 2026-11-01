@@ -19,6 +19,7 @@ use Slim::Utils::Scanner::Remote;
 use Plugins::StaticRadio::Schedule;
 use Plugins::StaticRadio::Presence;
 use Plugins::StaticRadio::MP3Seek;
+use Plugins::StaticRadio::Slots;
 
 my $log = logger('plugin.staticradio');
 
@@ -70,6 +71,20 @@ sub getNextTrack {
 		my $live = Plugins::StaticRadio::Schedule->live($st, $t + LEAD_MS)
 			or return $errorCb->('PLUGIN_STATICRADIO_NO_SCHEDULE', $song->track->url);
 		my $ep  = $live->{ep};
+
+		# A bulletin break plays what the board's slot list says (Slots.pm), so
+		# every listener hears the same one. Refresh the list first if it's stale.
+		if ($live->{bulletin} && $ep->{placementId}) {
+			if (!Plugins::StaticRadio::Slots->fresh) {
+				Plugins::StaticRadio::Slots->refresh(sub { $class->getNextTrack($song, $successCb, $errorCb) });
+				return;
+			}
+			if (my $sl = Plugins::StaticRadio::Slots->swap_for($id, $ep, $live->{slot_start})) {
+				main::INFOLOG && $log->info("$id: break $ep->{placementId} plays $sl->{bulletin_id} (slot list)");
+				$ep = { %$ep, audioUrl => $sl->{audio}, episodeId => $sl->{bulletin_id},
+				        episodeUrl => $sl->{link} || $ep->{episodeUrl} };
+			}
+		}
 		my $key = "$ep->{audioUrl}|$live->{slot_start}";
 		my $was = $now{ $client->id } || {};
 		# Called again for the next stretch of the stream (not a fresh tune)? Lyrion
