@@ -21,7 +21,7 @@ my $log = logger('plugin.staticradio');
 
 # Start this far ahead of the live moment: the scan, the request and the
 # player's buffer all take time before the first sample is heard.
-use constant LEAD_MS => 2500;
+use constant LEAD_MS => 1500;
 
 my %now;   # client id => what's on: { station, key, show, title, image, link, slot_end }
 
