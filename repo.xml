@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<extensions>
+    <details>
+        <title lang="EN">Static Radio plugin repository</title>
+    </details>
+    <plugins>
+        <plugin name="StaticRadio" version="0.1.0" minTarget="8.0" maxTarget="*">
+            <title lang="EN">Static Radio</title>
+            <desc lang="EN">A radio made of independent podcasts. Every station plays one shared live timeline, so everyone tuned in hears the same moment. Each episode streams straight from the show's own host.</desc>
+            <category>radio</category>
+            <icon>https://raw.githubusercontent.com/madewith-bestpractice/static-squeezebox/main/StaticRadio/HTML/EN/plugins/StaticRadio/html/images/icon.png</icon>
+            <url>https://github.com/madewith-bestpractice/static-squeezebox/releases/download/v0.1.0/StaticRadio-0.1.0.zip</url>
+            <link>https://github.com/madewith-bestpractice/static-squeezebox</link>
+            <sha>15de81ea53fa692674de4b2377e1e3edc57901da</sha>
+            <creator>Best Practice</creator>
+        </plugin>
+    </plugins>
+</extensions>
